@@ -1,3 +1,8 @@
+# FBFF
+
+A small ffmpeg-based media player for Linux framebuffer and Nano-X
+
+```
 FBFF
 ====
 
@@ -73,3 +78,8 @@ OPTION		DESCRIPTION
 -r		adjust the video to the right of the screen
 -b		adjust the video to the bottom of the screen
 ==============	================================================
+```
+
+![screenshot](/fbff-nano-X.png)
+
+FBFF running on Nano-X
