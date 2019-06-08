@@ -1,0 +1,10 @@
+#./fbff test3.mp4
+#./fbff test4.mov
+#./fbff -f test3.mp4
+#./fbff -x320 -y240 test3.mp4
+../microwindows/src/bin/nano-X & ./fbff test3.mp4
+#../microwindows/src/bin/nano-X & ./fbff test4.mov
+#../microwindows/src/bin/nano-X & ./fbff -w320 -h240 test3.mp4
+#../microwindows/src/bin/nano-X & ./fbff -f test3.mp4
+#../microwindows/src/bin/nano-X & ./fbff -s -u test3.mp4
+#../microwindows/src/bin/nano-X & ./fbff test2.mp4 & ./fbff test4.mov

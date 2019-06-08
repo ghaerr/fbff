@@ -112,10 +112,11 @@ static long ts_ms(void)
 	return tv.tv_sec * 1000 + tv.tv_usec / 1000;
 }
 
-static int wait(long ts, int vdelay)
+static int fwait(long ts, int vdelay)
 {
 	long nts = ts_ms();
 	if (nts > ts && ts + vdelay > nts) {
+//printf("sleep %ld\n", ts+vdelay-nts);
 		usleep((ts + vdelay - nts) * 1000);
 		return 0;
 	}
@@ -125,7 +126,7 @@ static int wait(long ts, int vdelay)
 void ffs_wait(struct ffs *ffs)
 {
 	int vdelay = ffs->dur;
-	if (!wait(ffs->ts, MAX(vdelay, 20)))
+	if (!fwait(ffs->ts, MAX(vdelay, 20)))
 		ffs->ts += MAX(vdelay, 20);
 	else
 		ffs->ts = ts_ms();		/* out of sync */
@@ -134,6 +135,8 @@ void ffs_wait(struct ffs *ffs)
 /* audio/video frame offset difference */
 int ffs_avdiff(struct ffs *ffs, struct ffs *affs)
 {
+	if (!affs || !ffs)
+		return 0;
 	return affs->pts - ffs->pts;
 }
 
@@ -212,7 +215,7 @@ int ffs_sdec(struct ffs *ffs, char *buf, int blen, long *beg, long *end)
 	return 0;
 }
 
-static int ffs_bytespersample(ffs)
+static int ffs_bytespersample(struct ffs *ffs)
 {
 	return av_get_bytes_per_sample(FFS_SAMPLEFMT) *
 		av_get_channel_layout_nb_channels(FFS_CHLAYOUT);
@@ -263,7 +266,7 @@ static int fbm2pixfmt(int fbm)
 	}
 }
 
-void ffs_vconf(struct ffs *ffs, float zoom, int fbm)
+void ffs_vconf(struct ffs *ffs, float wzoom, float hzoom, int fbm)
 {
 	int h = ffs->cc->height;
 	int w = ffs->cc->width;
@@ -271,12 +274,12 @@ void ffs_vconf(struct ffs *ffs, float zoom, int fbm)
 	int pixfmt = fbm2pixfmt(fbm);
 	uint8_t *buf = NULL;
 	int n;
-	ffs->swsc = sws_getContext(w, h, fmt, w * zoom, h * zoom,
+	ffs->swsc = sws_getContext(w, h, fmt, w * wzoom, h * hzoom,
 			pixfmt, SWS_FAST_BILINEAR,
 			NULL, NULL, NULL);
-	n = avpicture_get_size(pixfmt, w * zoom, h * zoom);
+	n = avpicture_get_size(pixfmt, w * wzoom, h * hzoom);
 	buf = av_malloc(n * sizeof(uint8_t));
-	avpicture_fill((AVPicture *) ffs->dst, buf, pixfmt, w * zoom, h * zoom);
+	avpicture_fill((AVPicture *) ffs->dst, buf, pixfmt, w * wzoom, h * hzoom);
 }
 
 void ffs_aconf(struct ffs *ffs)

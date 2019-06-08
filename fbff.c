@@ -7,23 +7,23 @@
  */
 #include <ctype.h>
 #include <fcntl.h>
-#include <pty.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <termios.h>
 #include <unistd.h>
-#include <sys/poll.h>
-#include <sys/soundcard.h>
 #include <pthread.h>
+#if __linux__
+#include <sys/soundcard.h>
+#include <sys/ioctl.h>
+#endif
 #include "ffs.h"
 #include "draw.h"
 
 #define MIN(a, b)	((a) < (b) ? (a) : (b))
 #define MAX(a, b)	((a) > (b) ? (a) : (b))
 
-typedef unsigned int fbval_t;	/* framebuffer depth */
+#define PROGNAME	"fbff"	/* program name*/
+#define WAITMS		20		/* msecs to wait for events*/
 
 static int paused;
 static int exited;
@@ -32,13 +32,15 @@ static int dojump;
 static int arg;
 static char filename[32];
 
-static float zoom = 1;
+static float wzoom = 1;
+static float hzoom = 1;
 static int magnify = 1;
 static int jump = 0;
 static int fullscreen = 0;
 static int video = 1;		/* video stream; 0:none, 1:auto, >1:idx */
 static int audio = 1;		/* audio stream; 0:none, 1:auto, >1:idx */
 static int posx, posy;		/* video position */
+static int vidw, vidh;		/* specified video width/height*/
 static int rjust, bjust;	/* justify video to screen right/bottom */
 
 static struct ffs *affs;	/* audio ffmpeg stream */
@@ -78,8 +80,8 @@ static void draw_frame(void *img, int linelen)
 	int w, h, rn, cn, cb, rb;
 	int i, r, c;
 	ffs_vinfo(vffs, &w, &h);
-	rn = h * zoom;
-	cn = w * zoom;
+	rn = h * hzoom;
+	cn = w * wzoom;
 	cb = rjust ? fb_cols() - cn * magnify + posx : posx;
 	rb = bjust ? fb_rows() - rn * magnify + posy : posy;
 	if (magnify == 1) {
@@ -97,6 +99,7 @@ static void draw_frame(void *img, int linelen)
 		}
 		free(brow);
 	}
+	fb_update();
 }
 
 static int oss_open(void)
@@ -106,9 +109,11 @@ static int oss_open(void)
 	if (afd < 0)
 		return 1;
 	ffs_ainfo(affs, &rate, &bps, &ch);
+#if __linux__
 	ioctl(afd, SOUND_PCM_WRITE_CHANNELS, &ch);
 	ioctl(afd, SOUND_PCM_WRITE_BITS, &bps);
 	ioctl(afd, SOUND_PCM_WRITE_RATE, &rate);
+#endif
 	return 0;
 }
 
@@ -116,7 +121,7 @@ static void oss_close(void)
 {
 	if (afd > 0)
 		close(afd);
-	afd = 0;
+	afd = -1;
 }
 
 /* audio buffers */
@@ -200,22 +205,6 @@ static void sub_print(void)
 
 /* fbff commands */
 
-static int cmdread(void)
-{
-	char b;
-	if (read(0, &b, 1) <= 0)
-		return -1;
-	return b;
-}
-
-static void cmdwait(void)
-{
-	struct pollfd ufds[1];
-	ufds[0].fd = 0;
-	ufds[0].events = POLLIN;
-	poll(ufds, 1, -1);
-}
-
 static void cmdjmp(int n, int rel)
 {
 	struct ffs *ffs = video ? vffs : affs;
@@ -256,7 +245,7 @@ static int cmdarg(int def)
 static void cmdexec(void)
 {
 	int c;
-	while ((c = cmdread()) >= 0) {
+	while ((c = readkey(WAITMS)) != 0) {
 		if (domark) {
 			domark = 0;
 			mark[c] = ffs_pos(video ? vffs : affs);
@@ -269,6 +258,7 @@ static void cmdexec(void)
 			continue;
 		}
 		switch (c) {
+		case -1:
 		case 'q':
 			exited = 1;
 			break;
@@ -371,7 +361,7 @@ static void mainloop(void)
 			break;
 		if (paused) {
 			a_doreset(1);
-			cmdwait();
+			//cmdwait();
 			continue;
 		}
 		while (audio && !eof && !a_prodwait()) {
@@ -383,7 +373,8 @@ static void mainloop(void)
 				a_prod = (a_prod + 1) & (ABUFCNT - 1);
 			}
 		}
-		if (video && (!audio || eof || vsync())) {
+		if (video && (/*!audio || eof ||*/ vsync())) {
+		//if (video && (!audio || eof || vsync())) {
 			int ignore = jump && (vnum % (jump + 1));
 			void *buf;
 			int ret = ffs_vdec(vffs, ignore ? NULL : &buf);
@@ -397,7 +388,6 @@ static void mainloop(void)
 			stroll();
 		}
 	}
-	exited = 1;
 }
 
 static void *process_audio(void *dat)
@@ -421,7 +411,7 @@ static void *process_audio(void *dat)
 	return NULL;
 }
 
-static char *usage = "usage: fbff [options] file\n"
+static char *usage = "usage: " PROGNAME " [options] file\n"
 	"\noptions:\n"
 	"  -z n     zoom the video\n"
 	"  -m n     magnify the video by duplicating pixels\n"
@@ -434,6 +424,8 @@ static char *usage = "usage: fbff [options] file\n"
 	"  -t path  subtitles file\n"
 	"  -x n     horizontal video position\n"
 	"  -y n     vertical video position\n"
+	"  -w n     video width\n"
+	"  -y n     video height\n"
 	"  -r       adjust the video to the right of the screen\n"
 	"  -b       adjust the video to the bottom of the screen\n\n";
 
@@ -447,7 +439,7 @@ static void read_args(int argc, char *argv[])
 		if (c[1] == 'm')
 			magnify = c[2] ? atoi(c + 2) : atoi(argv[++i]);
 		if (c[1] == 'z')
-			zoom = c[2] ? atof(c + 2) : atof(argv[++i]);
+			hzoom = wzoom = c[2] ? atof(c + 2) : atof(argv[++i]);
 		if (c[1] == 'j')
 			jump = c[2] ? atoi(c + 2) : atoi(argv[++i]);
 		if (c[1] == 'f')
@@ -457,11 +449,15 @@ static void read_args(int argc, char *argv[])
 		if (c[1] == 't')
 			sub_path = c[2] ? c + 2 : argv[++i];
 		if (c[1] == 'h')
-			printf(usage);
+			printf("%s", usage);
 		if (c[1] == 'x')
 			posx = c[2] ? atoi(c + 2) : atoi(argv[++i]);
 		if (c[1] == 'y')
 			posy = c[2] ? atoi(c + 2) : atoi(argv[++i]);
+		if (c[1] == 'w')
+			vidw = c[2] ? atoi(c + 2) : atoi(argv[++i]);
+		if (c[1] == 'h')
+			vidh = c[2] ? atoi(c + 2) : atoi(argv[++i]);
 		if (c[1] == 'r')
 			rjust = 1;
 		if (c[1] == 'b')
@@ -480,27 +476,13 @@ static void read_args(int argc, char *argv[])
 	}
 }
 
-static void term_init(struct termios *termios)
-{
-	struct termios newtermios;
-	tcgetattr(0, termios);
-	newtermios = *termios;
-	newtermios.c_lflag &= ~ICANON;
-	newtermios.c_lflag &= ~ECHO;
-	tcsetattr(0, TCSAFLUSH, &newtermios);
-	fcntl(0, F_SETFL, fcntl(0, F_GETFL) | O_NONBLOCK);
-}
-
-static void term_done(struct termios *termios)
-{
-	tcsetattr(0, 0, termios);
-}
-
 int main(int argc, char *argv[])
 {
-	struct termios termios;
 	pthread_t a_thread;
 	char *path = argv[argc - 1];
+#if !__linux__
+	audio = 0;		/* default no audio if not on linux*/
+#endif
 	if (argc < 2) {
 		printf("usage: %s [-u -s60 ...] file\n", argv[0]);
 		return 1;
@@ -508,8 +490,10 @@ int main(int argc, char *argv[])
 	read_args(argc, argv);
 	ffs_globinit();
 	snprintf(filename, sizeof(filename), "%s", path);
-	if (video && !(vffs = ffs_alloc(path, FFS_VIDEO | (video - 1))))
+	if (video && !(vffs = ffs_alloc(path, FFS_VIDEO | (video - 1)))) {
+		fprintf(stderr, "Can't open %s\n", filename);
 		video = 0;
+	}
 	if (audio && !(affs = ffs_alloc(path, FFS_AUDIO | (audio - 1))))
 		audio = 0;
 	if (!video && !audio)
@@ -526,22 +510,35 @@ int main(int argc, char *argv[])
 	}
 	if (video) {
 		int w, h;
-		if (fb_init())
-			return 1;
 		ffs_vinfo(vffs, &w, &h);
 		if (magnify != 1 && sizeof(fbval_t) != FBM_BPP(fb_mode()))
 			fprintf(stderr, "fbff: fbval_t does not match\n");
 		if (fullscreen) {
-			float hz = (float) fb_rows() / h / magnify;
-			float wz = (float) fb_cols() / w / magnify;
-			zoom = hz < wz ? hz : wz;
+			if (fb_init(PROGNAME, 0, 0))	/* use fullscreen, sets fb_rows/cols*/
+				return 1;
+			hzoom = (float) fb_rows() / h / magnify;
+			wzoom = (float) fb_cols() / w / magnify;
+		} else if (vidw || vidh) {
+			if (!vidw) vidw = w;
+			if (!vidh) vidh = h;
+			if (fb_init(PROGNAME, vidw, vidh))	/* set specified window size and zoom*/
+				return 1;
+			hzoom = (float) fb_rows() / h / magnify;
+			wzoom = (float) fb_cols() / w / magnify;
+		} else {
+			if (fb_init(PROGNAME, w, h))	/* create window size of video*/
+				return 1;
 		}
-		ffs_vconf(vffs, zoom, fb_mode());
+		ffs_vconf(vffs, wzoom, hzoom, fb_mode());
 	}
-	term_init(&termios);
-	mainloop();
-	term_done(&termios);
-	printf("\n");
+	term_setup();
+	do {
+		mainloop();
+		cmdjmp(0, 0);
+		paused = 1;
+		sync_cur = sync_cnt;
+	} while(!exited);
+	term_cleanup();
 
 	if (video) {
 		fb_free();
