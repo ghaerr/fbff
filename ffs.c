@@ -59,6 +59,7 @@ struct ffs *ffs_alloc(char *path, int flags)
 	ffs->si = av_find_best_stream(ffs->fc, ffs_stype(flags), idx, -1, NULL, 0);
 	if (ffs->si < 0)
 		goto failed;
+//av_dump_format(ffs->fc, 0, path, 0);
 	ffs->cc = ffs->fc->streams[ffs->si]->codec;
 	if (avcodec_open2(ffs->cc, avcodec_find_decoder(ffs->cc->codec_id), &opt))
 		goto failed;
@@ -147,8 +148,7 @@ long ffs_pos(struct ffs *ffs)
 
 void ffs_seek(struct ffs *ffs, struct ffs *vffs, long pos)
 {
-	av_seek_frame(ffs->fc, vffs->si,
-		pos / av_q2d(vffs->st->time_base) / 1000, 0);
+	av_seek_frame(ffs->fc, vffs->si, pos / av_q2d(vffs->st->time_base) / 1000, 0);
 	ffs->ts = 0;
 }
 

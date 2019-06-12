@@ -1,3 +1,7 @@
+12 Jun 2019
+	* use miniaudio for portable OSX/Linux audio, remove Linux OSS
+	* increased audio buffer to 8192, rewind fails if audio packets larger than buffer size!?
+	* add L loop cmd
 8 Jun 2019
 	* add seperate width and height zoom factors for fullscreen and -w/-h
 	* add -w# and -h# options for video sizing

@@ -2,6 +2,7 @@
  * fbff - a small ffmpeg-based framebuffer/oss media player
  *
  * Copyright (C) 2009-2015 Ali Gholami Rudi
+ *	Port to Microwindows and miniaudio Copyright (c) 2019 Greg haerr
  *
  * This program is released under the Modified BSD license.
  */
@@ -11,11 +12,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <pthread.h>
-#if __linux__
-#include <sys/soundcard.h>
-#include <sys/ioctl.h>
-#endif
+
+#define MA_NO_DECODING
+#define MINIAUDIO_IMPLEMENTATION
+#include "miniaudio.h"
+
 #include "ffs.h"
 #include "draw.h"
 
@@ -25,10 +26,12 @@
 #define PROGNAME	"fbff"	/* program name*/
 #define WAITMS		20		/* msecs to wait for events*/
 
+static int eof;
 static int paused;
 static int exited;
 static int domark;
 static int dojump;
+static int loop;
 static int arg;
 static char filename[32];
 
@@ -45,8 +48,7 @@ static int rjust, bjust;	/* justify video to screen right/bottom */
 
 static struct ffs *affs;	/* audio ffmpeg stream */
 static struct ffs *vffs;	/* video ffmpeg stream */
-static int afd;			/* oss fd */
-static int vnum;		/* decoded video frame count */
+static int vnum;			/* decoded video frame count */
 static long mark[256];		/* marks */
 
 static int sync_diff;		/* audio/video frame position diff */
@@ -102,58 +104,73 @@ static void draw_frame(void *img, int linelen)
 	fb_update();
 }
 
+/* audio buffers */
+static ma_device_config audio_config;
+static ma_device audio_device;
+static int audio_channels;
+static unsigned int audio_buf_size = 0;
+static unsigned int audio_buf_index = 0;
+
+static void audio_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount)
+{
+	int cnt, audio_size;
+	char *stream = pOutput;
+	int len = frameCount * audio_channels * sizeof(short);
+	static unsigned char audio_buf[8192];
+
+	while(len > 0) {
+		if(audio_buf_index >= audio_buf_size) {
+			/* We have already sent all our data; get more */
+			audio_size = ffs_adec(affs, audio_buf, sizeof(audio_buf));
+
+			if(audio_size < 0) {
+				//eof++;		/* uncomment to end playback when audio ends*/
+//printf("audio ended\n");
+				/* If error, output silence */
+				audio_buf_size = 1024;
+				memset(audio_buf, 0, audio_buf_size);
+			} else {
+				audio_buf_size = audio_size;
+			}
+			audio_buf_index = 0;
+		}
+		cnt = MIN(audio_buf_size - audio_buf_index, len);
+		memcpy(stream, audio_buf + audio_buf_index, cnt);
+		len -= cnt;
+		stream += cnt;
+		audio_buf_index += cnt;
+	}
+}
+
 static int oss_open(void)
 {
-	int rate, ch, bps;
-	afd = open("/dev/dsp", O_WRONLY);
-	if (afd < 0)
+	int rate, bps;
+	ffs_ainfo(affs, &rate, &bps, &audio_channels);
+    audio_config = ma_device_config_init(ma_device_type_playback);
+    audio_config.playback.format   = ma_format_s16;		/* bps always = 16*/
+    audio_config.playback.channels = audio_channels;
+    audio_config.sampleRate        = rate;
+    audio_config.dataCallback      = audio_callback;
+    audio_config.pUserData         = 0;
+    if (ma_device_init(NULL, &audio_config, &audio_device) != MA_SUCCESS) {
+		audio = 0;
 		return 1;
-	ffs_ainfo(affs, &rate, &bps, &ch);
-#if __linux__
-	ioctl(afd, SOUND_PCM_WRITE_CHANNELS, &ch);
-	ioctl(afd, SOUND_PCM_WRITE_BITS, &bps);
-	ioctl(afd, SOUND_PCM_WRITE_RATE, &rate);
-#endif
+	}
+    ma_device_start(&audio_device);
 	return 0;
 }
 
 static void oss_close(void)
 {
-	if (afd > 0)
-		close(afd);
-	afd = -1;
-}
-
-/* audio buffers */
-
-#define ABUFCNT		(1 << 3)	/* number of audio buffers */
-#define ABUFLEN		(1 << 18)	/* audio buffer length */
-
-static int a_cons;
-static int a_prod;
-static char a_buf[ABUFCNT][ABUFLEN];
-static int a_len[ABUFCNT];
-static int a_reset;
-
-static int a_conswait(void)
-{
-	return a_cons == a_prod;
-}
-
-static int a_prodwait(void)
-{
-	return ((a_prod + 1) & (ABUFCNT - 1)) == a_cons;
+    ma_device_uninit(&audio_device);
 }
 
 static void a_doreset(int pause)
 {
-	a_reset = 1 + pause;
-	while (audio && a_reset)
-		stroll();
+	audio_buf_size = audio_buf_index = 0;
 }
 
 /* subtitle handling */
-
 #define SUBSCNT		2048		/* number of subtitles */
 #define SUBSLEN		80		/* maximum subtitle length */
 
@@ -210,13 +227,14 @@ static void cmdjmp(int n, int rel)
 	struct ffs *ffs = video ? vffs : affs;
 	long pos = (rel ? ffs_pos(ffs) : 0) + n * 1000;
 	a_doreset(0);
-	sync_cur = sync_cnt;
+	sync_first = 1;				/* sync audio and video together after jump*/
+	vnum = 0;
 	if (pos < 0)
 		pos = 0;
 	if (!rel)
 		mark['\''] = ffs_pos(ffs);
 	if (audio)
-		ffs_seek(affs, ffs, pos);
+		ffs_seek(affs, affs, pos);
 	if (video)
 		ffs_seek(vffs, ffs, pos);
 }
@@ -227,7 +245,7 @@ static void cmdinfo(void)
 	long pos = ffs_pos(ffs);
 	long percent = ffs_duration(ffs) ? pos * 10 / (ffs_duration(ffs) / 100) : 0;
 	printf("\r\33[K%c %3ld.%01ld%%  %3ld:%02ld.%01ld  (AV:%4d)     [%s] \r",
-		paused ? (afd < 0 ? '*' : ' ') : '>',
+		paused ? (audio == 0 ? '*' : ' ') : '>',
 		percent / 10, percent % 10,
 		pos / 60000, (pos % 60000) / 1000, (pos % 1000) / 100,
 		video && audio ? ffs_avdiff(vffs, affs) : 0,
@@ -295,14 +313,16 @@ static void cmdexec(void)
 		case 'i':
 			cmdinfo();
 			break;
+		case 'L':
+			loop = 1;
+			if (!paused) break;
+			/* fall through if paused to unpause*/
 		case ' ':
 		case 'p':
-			if (audio && paused)
-				if (oss_open())
-					break;
-			if (audio && !paused)
-				oss_close();
 			paused = !paused;
+			if (paused)
+					ma_device_stop(&audio_device);
+			else ma_device_start(&audio_device);
 			sync_cur = sync_cnt;
 			break;
 		case '-':
@@ -354,27 +374,16 @@ static int vsync(void)
 
 static void mainloop(void)
 {
-	int eof = 0;
+	eof = 0;
 	while (eof < audio + video) {
 		cmdexec();
 		if (exited)
 			break;
 		if (paused) {
 			a_doreset(1);
-			//cmdwait();
 			continue;
 		}
-		while (audio && !eof && !a_prodwait()) {
-			int ret = ffs_adec(affs, a_buf[a_prod], ABUFLEN);
-			if (ret < 0)
-				eof++;
-			if (ret > 0) {
-				a_len[a_prod] = ret;
-				a_prod = (a_prod + 1) & (ABUFCNT - 1);
-			}
-		}
 		if (video && (/*!audio || eof ||*/ vsync())) {
-		//if (video && (!audio || eof || vsync())) {
 			int ignore = jump && (vnum % (jump + 1));
 			void *buf;
 			int ret = ffs_vdec(vffs, ignore ? NULL : &buf);
@@ -388,27 +397,6 @@ static void mainloop(void)
 			stroll();
 		}
 	}
-}
-
-static void *process_audio(void *dat)
-{
-	while (1) {
-		while (!a_reset && (a_conswait() || paused) && !exited)
-			stroll();
-		if (exited)
-			return NULL;
-		if (a_reset) {
-			if (a_reset == 1)
-				a_cons = a_prod;
-			a_reset = 0;
-			continue;
-		}
-		if (afd > 0) {
-			write(afd, a_buf[a_cons], a_len[a_cons]);
-			a_cons = (a_cons + 1) & (ABUFCNT - 1);
-		}
-	}
-	return NULL;
 }
 
 static char *usage = "usage: " PROGNAME " [options] file\n"
@@ -478,13 +466,9 @@ static void read_args(int argc, char *argv[])
 
 int main(int argc, char *argv[])
 {
-	pthread_t a_thread;
 	char *path = argv[argc - 1];
-#if !__linux__
-	audio = 0;		/* default no audio if not on linux*/
-#endif
 	if (argc < 2) {
-		printf("usage: %s [-u -s60 ...] file\n", argv[0]);
+		printf("usage: %s [-u -s60 ...] file\n", PROGNAME);
 		return 1;
 	}
 	read_args(argc, argv);
@@ -503,10 +487,9 @@ int main(int argc, char *argv[])
 	if (audio) {
 		ffs_aconf(affs);
 		if (oss_open()) {
-			fprintf(stderr, "fbff: /dev/dsp busy?\n");
+			fprintf(stderr, "%s: Can't open audio subsystem\n", PROGNAME);
 			return 1;
 		}
-		pthread_create(&a_thread, NULL, process_audio, NULL);
 	}
 	if (video) {
 		int w, h;
@@ -534,9 +517,11 @@ int main(int argc, char *argv[])
 	term_setup();
 	do {
 		mainloop();
+
+		if (audio && !paused && !loop)
+			ma_device_stop(&audio_device);
 		cmdjmp(0, 0);
-		paused = 1;
-		sync_cur = sync_cnt;
+		if (!loop) paused = 1;
 	} while(!exited);
 	term_cleanup();
 
@@ -545,7 +530,6 @@ int main(int argc, char *argv[])
 		ffs_free(vffs);
 	}
 	if (audio) {
-		pthread_join(a_thread, NULL);
 		oss_close();
 		ffs_free(affs);
 	}
