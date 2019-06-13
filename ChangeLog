@@ -1,4 +1,5 @@
 12 Jun 2019
+	* wait until display initialized before starting audio
 	* use miniaudio for portable OSX/Linux audio, remove Linux OSS
 	* increased audio buffer to 8192, rewind fails if audio packets larger than buffer size!?
 	* add L loop cmd

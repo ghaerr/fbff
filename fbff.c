@@ -142,7 +142,7 @@ static void audio_callback(ma_device* pDevice, void* pOutput, const void* pInput
 	}
 }
 
-static int oss_open(void)
+static int aud_open(void)
 {
 	int rate, bps;
 	ffs_ainfo(affs, &rate, &bps, &audio_channels);
@@ -156,11 +156,10 @@ static int oss_open(void)
 		audio = 0;
 		return 1;
 	}
-    ma_device_start(&audio_device);
 	return 0;
 }
 
-static void oss_close(void)
+static void aud_close(void)
 {
     ma_device_uninit(&audio_device);
 }
@@ -314,8 +313,8 @@ static void cmdexec(void)
 			cmdinfo();
 			break;
 		case 'L':
-			loop = 1;
-			if (!paused) break;
+			loop = !loop;
+			if (!paused && !loop) break;
 			/* fall through if paused to unpause*/
 		case ' ':
 		case 'p':
@@ -486,7 +485,7 @@ int main(int argc, char *argv[])
 		sub_read();
 	if (audio) {
 		ffs_aconf(affs);
-		if (oss_open()) {
+		if (aud_open()) {
 			fprintf(stderr, "%s: Can't open audio subsystem\n", PROGNAME);
 			return 1;
 		}
@@ -514,7 +513,9 @@ int main(int argc, char *argv[])
 		}
 		ffs_vconf(vffs, wzoom, hzoom, fb_mode());
 	}
+
 	term_setup();
+    ma_device_start(&audio_device);
 	do {
 		mainloop();
 
@@ -530,7 +531,7 @@ int main(int argc, char *argv[])
 		ffs_free(vffs);
 	}
 	if (audio) {
-		oss_close();
+		aud_close();
 		ffs_free(affs);
 	}
 	return 0;

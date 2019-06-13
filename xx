@@ -6,8 +6,8 @@
 #../microwindows/src/bin/nano-X & ./fbff helo.mov
 #../microwindows/src/bin/nano-X & ./fbff short.mov
 #../microwindows/src/bin/nano-X & ./fbff talk.mp4
-../microwindows/src/bin/nano-X & ./fbff eggs.mov
-#../microwindows/src/bin/nano-X & ./fbff plane.mp4
+#../microwindows/src/bin/nano-X & ./fbff eggs.mov
+../microwindows/src/bin/nano-X & ./fbff plane.mp4
 #../microwindows/src/bin/nano-X & ./fbff -w320 -h240 winery.mp4
 #../microwindows/src/bin/nano-X & ./fbff -f winery.mp4
 #../microwindows/src/bin/nano-X & ./fbff -s -u winery.mp4
