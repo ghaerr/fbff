@@ -3,12 +3,15 @@
 #./fbff -f winery.mp4
 #./fbff -x320 -y240 winery.mp4
 #../microwindows/src/bin/nano-X & ./fbff winery.mp4
-#../microwindows/src/bin/nano-X & ./fbff helo.mov
+#../microwindows/src/bin/nano-X & ./fbff -F helo.mov
 #../microwindows/src/bin/nano-X & ./fbff short.mov
+#../microwindows/src/bin/nano-X & ./fbff -F short.mov
+../microwindows/src/bin/nano-X & ./fbff -F -d jump.mov
+#../microwindows/src/bin/nano-X & ./fbff dog.mov
 #../microwindows/src/bin/nano-X & ./fbff talk.mp4
 #../microwindows/src/bin/nano-X & ./fbff eggs.mov
-../microwindows/src/bin/nano-X & ./fbff plane.mp4
+#../microwindows/src/bin/nano-X & ./fbff plane.mp4
 #../microwindows/src/bin/nano-X & ./fbff -w320 -h240 winery.mp4
-#../microwindows/src/bin/nano-X & ./fbff -f winery.mp4
+#../microwindows/src/bin/nano-X & ./fbff -F winery.mp4
 #../microwindows/src/bin/nano-X & ./fbff -s -u winery.mp4
 #../microwindows/src/bin/nano-X & ./fbff plane.mp4 & ./fbff helo.mov

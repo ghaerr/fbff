@@ -40,6 +40,8 @@ static float hzoom = 1;
 static int magnify = 1;
 static int jump = 0;
 static int fullscreen = 0;
+static int frame = APPFRAME;/* application window frame type*/
+static int flipy = 0;
 static int video = 1;		/* video stream; 0:none, 1:auto, >1:idx */
 static int audio = 1;		/* audio stream; 0:none, 1:auto, >1:idx */
 static int posx, posy;		/* video position */
@@ -67,6 +69,8 @@ static void draw_row(int rb, int cb, void *img, int cn)
 {
 	if (rb < 0 || rb >= fb_rows())
 		return;
+	if (flipy)
+		rb = fb_rows() - 1 - rb;
 	if (cb < 0) {
 		cn = -cb < cn ? cn + cb : 0;
 		img += -cb;
@@ -403,7 +407,8 @@ static char *usage = "usage: " PROGNAME " [options] file\n"
 	"  -z n     zoom the video\n"
 	"  -m n     magnify the video by duplicating pixels\n"
 	"  -j n     jump every n video frames; for slow machines\n"
-	"  -f       start full screen\n"
+	"  -f       full screen (stretched)\n"
+	"  -F       fit to screen (maintain aspect ratio)\n"
 	"  -v n     select video stream; '-' disables video\n"
 	"  -a n     select audio stream; '-' disables audio\n"
 	"  -s       always synchronize (-sx for every x frames)\n"
@@ -413,6 +418,7 @@ static char *usage = "usage: " PROGNAME " [options] file\n"
 	"  -y n     vertical video position\n"
 	"  -w n     video width\n"
 	"  -y n     video height\n"
+	"  -d       flip video upside down\n"
 	"  -r       adjust the video to the right of the screen\n"
 	"  -b       adjust the video to the bottom of the screen\n\n";
 
@@ -430,7 +436,9 @@ static void read_args(int argc, char *argv[])
 		if (c[1] == 'j')
 			jump = c[2] ? atoi(c + 2) : atoi(argv[++i]);
 		if (c[1] == 'f')
-			fullscreen = 1;
+			{ fullscreen = 1; frame = NOFRAME; }
+		if (c[1] == 'F')
+			{ fullscreen = 2; frame = BORDER; }
 		if (c[1] == 's')
 			sync_period = c[2] ? atoi(c + 2) : 1;
 		if (c[1] == 't')
@@ -445,6 +453,8 @@ static void read_args(int argc, char *argv[])
 			vidw = c[2] ? atoi(c + 2) : atoi(argv[++i]);
 		if (c[1] == 'h')
 			vidh = c[2] ? atoi(c + 2) : atoi(argv[++i]);
+		if (c[1] == 'd')
+			flipy = 1;
 		if (c[1] == 'r')
 			rjust = 1;
 		if (c[1] == 'b')
@@ -496,19 +506,44 @@ int main(int argc, char *argv[])
 		if (magnify != 1 && sizeof(fbval_t) != FBM_BPP(fb_mode()))
 			fprintf(stderr, "fbff: fbval_t does not match\n");
 		if (fullscreen) {
-			if (fb_init(PROGNAME, 0, 0))	/* use fullscreen, sets fb_rows/cols*/
+			if (fb_init())					/* sets fb_rows/cols*/
 				return 1;
-			hzoom = (float) fb_rows() / h / magnify;
-			wzoom = (float) fb_cols() / w / magnify;
+			vidw = fb_cols();
+			vidh = fb_rows();
+			if (fullscreen == 2) {
+				/* fit-to-screen maintaint aspect ratio*/
+				float wi = w;
+				float hi = h;
+				float ri = wi / hi;
+				float ws = vidw;
+				float hs = vidh;
+				float rs = ws / hs;
+				if (rs > ri) {
+					/* use full screen height, shortened width*/
+					hzoom = wzoom = hs/hi;
+					vidw = wi * wzoom;
+				} else {
+					/* use full screen width, shortened height*/
+					wzoom = hzoom = ws/wi;
+					vidh = hi * hzoom;
+				}
+//printf("vid %d,%d w,h %f,%f screen %f,%f zoom %f, %f\n", vidw, vidh, wi, hi, ws, hs, wzoom, hzoom);
+			} else {
+				/* fullscreen stretch*/
+				wzoom = (float) vidw / w / magnify;
+				hzoom = (float) vidh / h / magnify;
+			}
+			if (fb_open(PROGNAME, vidw, vidh, frame))				/* use fullscreen*/
+				return 1;
 		} else if (vidw || vidh) {
 			if (!vidw) vidw = w;
 			if (!vidh) vidh = h;
-			if (fb_init(PROGNAME, vidw, vidh))	/* set specified window size and zoom*/
+			if (fb_init() || fb_open(PROGNAME, vidw, vidh, frame))	/* set specified window size and zoom*/
 				return 1;
-			hzoom = (float) fb_rows() / h / magnify;
 			wzoom = (float) fb_cols() / w / magnify;
+			hzoom = (float) fb_rows() / h / magnify;
 		} else {
-			if (fb_init(PROGNAME, w, h))	/* create window size of video*/
+			if (fb_init() || fb_open(PROGNAME, w, h, frame))		/* create window size of video*/
 				return 1;
 		}
 		ffs_vconf(vffs, wzoom, hzoom, fb_mode());

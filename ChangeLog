@@ -1,3 +1,8 @@
+13 Jun 2019
+	* add -F option for fit-to-screen while maintaining aspect ratio, no caption, just border
+	* add -d option to flip video upside down
+	* -f option for fullscreen uses no border
+	* add fb_open call for w,h,window flags after fb_init
 12 Jun 2019
 	* wait until display initialized before starting audio
 	* use miniaudio for portable OSX/Linux audio, remove Linux OSS
